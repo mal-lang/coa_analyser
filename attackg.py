@@ -231,54 +231,63 @@ class AttackGraph(nx.DiGraph):
 
                             classdefs = meta_lang["assets"][self.nodes[node]["class"]]["defenses"]
                             defense_info = next((d for d in classdefs if d["name"] == self.nodes[node]["attackstep"]), False)
-                            try:
-                                def_class_cost = defense_info["metaInfo"]["cost"]
-                                def_class_cost_time = defense_info["metaInfo"]["cost_time"]
-                                def_name = defense_info["name"]
-                                current_mc = None
-                                current_tc = None
+                            if "cost" not in defense_info["metaInfo"]:
+                                logging.info('No user defined tag or ' +
+                                    'language cost was found for the ' +
+                                    f'{defense_info["name"]} defence');
+                                break
 
-                                if len(def_class_cost) > 1:
-                                    current_mc = def_class_cost.pop(0)
-                                else:
-                                    current_mc = def_class_cost[0]
+                            def_class_cost = defense_info["metaInfo"]["cost"]
+                            def_class_cost_time = defense_info["metaInfo"]["cost_time"]
+                            def_name = defense_info["name"]
+                            current_mc = None
+                            current_tc = None
 
-                                if len(def_class_cost_time) > 1:
-                                    current_tc = def_class_cost_time.pop(0)
-                                else:
-                                    current_tc = def_class_cost_time[0]
+                            if len(def_class_cost) > 1:
+                                current_mc = def_class_cost.pop(0)
+                            else:
+                                current_mc = def_class_cost[0]
 
-                                if budget_remaining > current_mc:
-                                    changed_budget = budget_remaining - current_mc
-                                    monetary_cost = json.dumps(current_mc)
-                                    results = '"Monetary Cost of defense is: " {} \n'.format(monetary_cost)
+                            if len(def_class_cost_time) > 1:
+                                current_tc = def_class_cost_time.pop(0)
+                            else:
+                                current_tc = def_class_cost_time[0]
 
-                                    data["CoAs"].append({})
-                                    data["CoAs"][-1]["monetary_cost"] = {"1": int(current_mc)}
+                            if budget_remaining > current_mc:
+                                changed_budget = budget_remaining - current_mc
+                                monetary_cost = json.dumps(current_mc)
+                                results = '"Monetary Cost of defense is: " {} \n'.format(monetary_cost)
 
-                                    data["CoAs"][-1]["defenses"] = []
-                                    if len(data["CoAs"]) > 1:
-                                        data["CoAs"][-1]["defenses"] = data["CoAs"][-2]["defenses"].copy()
-                                    data["CoAs"][-1]["defenses"].append({"ref": def_costs["ref"], "defenseName": def_name, "defenseInfo": def_name + " is used" })
-                                    self.nodes[node]["ref"] = def_costs["ref"]
+                                data["CoAs"].append({})
+                                data["CoAs"][-1]["monetary_cost"] = {"1": int(current_mc)}
 
-                                    write_json_file(JSON_FILENAME, data)
+                                data["CoAs"][-1]["defenses"] = []
+                                if len(data["CoAs"]) > 1:
+                                    data["CoAs"][-1]["defenses"] = data["CoAs"][-2]["defenses"].copy()
+                                data["CoAs"][-1]["defenses"].append({"ref": def_costs["ref"], "defenseName": def_name, "defenseInfo": def_name + " is used" })
+                                self.nodes[node]["ref"] = def_costs["ref"]
+
+                                write_json_file(JSON_FILENAME, data)
 
 
-                                    results = '"Name of defense is: " {} \n'.format(def_name)
-                                    logging.debug("Defence fits into the budget " +
-                                            "and therefore can be applied");
-                                    return self.nodes[node], changed_budget
-                                else:
-                                    not_enough_budget = True
-                                    block_range_def[best_def] = 0  # if both costs are high or no cost given
-                                    logging.debug("Defence is beyond the budget " +
-                                        "and therefore cannot be applied");
-                                    break
-                            except:
-                                logging.error("No user defined tag or " +
-                                "language cost was found for the defence");
-                        if not_enough_budget: #TODO when the defense is out of budget wrt top_attack_step (can be improved - once a defense out of budget it should be removed totally)
+                                results = '"Name of defense is: " {} \n'.format(def_name)
+                                logging.debug("Defence fits into the budget " +
+                                        "and therefore can be applied");
+                                return self.nodes[node], changed_budget
+                            else:
+                                not_enough_budget = True
+                                block_range_def[best_def] = 0  # if both costs are high or no cost given
+                                logging.debug("Defence is beyond the budget " +
+                                    "and therefore cannot be applied");
+                                break
+
+                            logging.info('No user defined tag or ' +
+                                'language cost was found for the ' +
+                                f'{defense_info["name"]} defence');
+                        if not_enough_budget:
+                        #TODO when the defense is out of budget wrt
+                        # top_attack_step (can be improved - once a defense out
+                        # of budget it should be removed totally)
                             break
                     block_range_def[best_def] = 0  # if both costs are high or no cost given
             else:

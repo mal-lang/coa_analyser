@@ -24,17 +24,23 @@ def read_json_file(filename):
     else:
         return {}
 
-
 def write_json_file(filename, data):
     with open(filename, 'w') as f:
         json.dump(data, f, indent = 4)
 
-JSON_FILENAME = "results.json"
-final_result = {}
-
+RESULTS_FILENAME = "results.json"
 LOG_FILENAME = "log.txt"
 
-temp_inf = 1.7976931348623157e+308
+TEMP_INF = 1.7976931348623157e+308
+INITIAL_BUDGET = 2000
+MAX_ITERATIONS = 100
+
+SUCCESS = 0
+ERROR_INCORRECT_CONFIG = 1
+ERROR_FAILED_SIM = 2
+ERROR_NO_DEFENCE = 3
+
+MAX_SIMULATION_CREATION_RETRIES = 5
 
 from flask import Flask, request
 
@@ -44,8 +50,6 @@ app = Flask(__name__)
 suppress = True
 if suppress and not sys.warnoptions:
     warnings.simplefilter("ignore")
-
-################# your input required
 
 def efficiency(initial, final):
     '''
@@ -68,34 +72,71 @@ def efficiency(initial, final):
         initial50 = max(initial[x][1], 0.001)
         final5 = max(final[x][0], 0.001)
         final50 = max(final[x][1], 0.001)
-        logging.debug("within Efficiency ttc5 {} - ttc50 {} - ".format(initial[x][0], initial[x][1]))
-        if initial[x][0] != temp_inf:
-            if initial[x][1] == temp_inf:
+        logging.debug(f"within Efficiency ttc5: {initial[x][0]} " +
+            f"ttc50: {initial[x][1]}")
+        if initial[x][0] != TEMP_INF:
+            if initial[x][1] == TEMP_INF:
                 # ttc5_i is finite, ttc50_i is not
                 result += np.power(1.05, -initial5) * min(final5 - initial5, c)
             else:
                 # ttc5_i is finite, ttc50_i is also finite
-                result += np.power(1.05, -initial5) * min(final5 - initial5, c) + np.power(1.05, -initial50) * min(
-                    final50 - initial50, c)
+                result += np.power(1.05, -initial5) * \
+                    min(final5 - initial5, c) + np.power(1.05, -initial50) * \
+                    min( final50 - initial50, c)
     return round(result, 3)
 
-if __name__ == "__main__":
+def create_simulation(client, scenario, name, iteration, model, tunings = []):
+
+        # create new simulation
+        retries = 0
+        samples = 100
+        simulation = None
+
+        while retries < MAX_SIMULATION_CREATION_RETRIES:
+            try:
+                model.model["samples"] = samples
+                logging.info(f'For iteration {iteration} create new ' +
+                    'simulation with the following tunings:\n' +
+                    json.dumps(tunings, indent = 2))
+                simulation = client.simulations.create_simulation(scenario,
+                    name = name + " s=" + str(samples), model = model, raw_tunings = tunings)
+                simres = simulation.get_results()
+                logging.debug(f'Ran new simulation {name} with:\n' +
+                    json.dumps(simres, indent = 2))
+                return simulation, simres
+                break
+
+            except Exception as e:
+                retries += 1
+                if retries < MAX_SIMULATION_CREATION_RETRIES:
+                    samples = samples + 100 * retries
+                    logging.warning(f"Simulation failed with:\n{e}\n" +
+                        "Retrying failed simulation with more samples.\n" +
+                        f"Retries:{retries}. Retrying with {samples} " +
+                        "samples.")
+
+        logging.error("Simulation failed")
+        print("Simulation failed")
+        return None, None
+
+def run_coa():
     logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
                     datefmt='%m-%d %H:%M',
                     filename=LOG_FILENAME,
                     filemode='w')
 
-    if os.path.isfile(JSON_FILENAME):
-        os.remove(JSON_FILENAME)
+    if os.path.isfile(RESULTS_FILENAME):
+        os.remove(RESULTS_FILENAME)
     config = configparser.ConfigParser()
     config.read('coa.ini')
 
-    budget_remaining = 20000
+    budget_remaining = INITIAL_BUDGET
     logging.info(f"Starting budget: {budget_remaining}")
 
     # Create an authenticated enterprise client
-    #to get the results with the simid and get the model_id by taking results["model_data"]["mid"] and then model = get_model_by_mid(model_id)
+    # to get the results with the simid and get the model_id by taking
+    # results["model_data"]["mid"] and then model = get_model_by_mid(model_id)
 
     logging.info("Log in to Enterprise.")
     client = enterprise.client(
@@ -110,128 +151,74 @@ if __name__ == "__main__":
     # Must "cheat" here and call a raw API to obtain full language meta.
     # The SDK method client.metadata.get_metadata() will not provide everything needed.
     lang_meta = client._get("metadata")
-    logging.debug("Client's language metadata:\n" +
-        json.dumps(lang_meta, indent = 2))
 
     survey_costs = None
     with open('./costs_survey.json', 'r') as f:
         survey_costs = json.load(f)
 
-    def_cat = "User"
-    def_name = "SecurityAwareness"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "SoftwareVulnerability"
-    def_name = "Remove"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Identity"
-    def_name = "Disabled"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Group"
-    def_name = "Disabled"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Privileges"
-    def_name = "Disabled"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Directory"
-    def_name = "Disabled"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Hardware"
-    def_name = "HardwareModificationsProtection"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Application"
-    def_name = "Disabled"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "ConnectionRule"
-    def_name = "Restricted"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Credentials"
-    def_name = "NotDisclosed"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Credentials"
-    def_name = "NotPhishable"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
-    def_cat = "Network"
-    def_name = "ManInTheMiddleDefense"
-    svds = lang_meta["assets"][def_cat]["defenses"]
-    svr = next((d for d in svds if d["name"] == def_name), False)
-    svr["metaInfo"]["cost"] = survey_costs[def_cat][def_name]
-    svr["metaInfo"]["cost_time"] = [30, 10]
-
     logging.debug("Survey costs found.\n" +
         json.dumps(survey_costs, indent = 2))
 
-    # Get the project where the model will be added
-    project = client.projects.get_project_by_name(name=config["project"]["name"])
-    simID = "198799675036799"
-    res = client._post("model/file", data={"pid": project.pid, "mids": [simID]})
-    base_model_dict = client._post("model/json", data={"pid": project.pid, "mids": [simID]})
-    base_model = Model(base_model_dict)
-    scenario = client.scenarios.get_scenario_by_name(project=project,
-        name=config["project"]["scenario"])
-    resp = client._post("scenarios", data={"pid": project.pid})
-    logging.info(f"Project pid: {project.pid} SimID: {simID}")
-    for scenario_id, scenario_data in resp.items():
-        if scenario_id == scenario.tid:
-            logging.debug(f'Received scenario data: {scenario_data["basemodel"]}')
-            break
+    for asset in lang_meta["assets"]:
+        for defence in lang_meta["assets"][asset]["defenses"]:
+            if asset in survey_costs and \
+                defence["name"] in survey_costs[asset]:
+                defence["metaInfo"]["cost"] = survey_costs[asset][defence["name"]]
+                defence["metaInfo"]["cost_time"] = [30, 10]
 
-    simulations = enterprise.simulations.Simulations(client)
-    #simulation = simulations.get_simulation_by_simid(project, simID)
-    #scenario = client.scenarios.get_scenario_by_name(project, scenario)
-    simulation = client.simulations.get_simulation_by_simid(scenario, simID)
-    logging.debug(f'Simulation TID: {simulation.tid} Name: {simulation.name}')
+    logging.debug("Client's language metadata:\n" +
+        json.dumps(lang_meta, indent = 2))
 
-    scad_dump = base64.b64decode(res["data"].encode("utf-8"), validate=True)
+    if "project" in config and "name" in config["project"] and \
+        config["project"]["name"]:
+        # Get the project where the model will be added
+        project_name = config["project"]["name"]
+        project = client.projects.get_project_by_name(name = project_name)
 
-    # Get the model info for the target model from the project
+    else:
+        logging.critical('Could not find project or project name in ' +
+            'coa.ini config file.')
+        print('Could not find project or project name in',
+            'coa.ini config file.')
+        return ERROR_INCORRECT_CONFIG
 
-    #models = enterprise.models.Models(client).list_models(project)
+    if "simID" in config["project"] and config["project"]["simID"]:
+        simID = config["project"]["simID"]
+        res = client._post("model/file", data={"pid": project.pid, "mids": [simID]})
+        base_model_dict = client._post("model/json", data={"pid": project.pid, "mids": [simID]})
+        model = Model(base_model_dict)
+        scenario = client.scenarios.get_scenario_by_name(project = project,
+            name = config["project"]["scenario"])
+        resp = client._post("scenarios", data={"pid": project.pid})
+        logging.info(f"Loaded initial simulation with project name: " +
+            f"{project_name} and simulation id: {simID}")
 
-    models = enterprise.models.Models(client)
+        simulations = enterprise.simulations.Simulations(client)
+        simulation = client.simulations.get_simulation_by_simid(scenario, simID)
+        model_name = simulation.name
+        scad_dump = base64.b64decode(res["data"].encode("utf-8"), validate=True)
+
+    elif "model" in config["project"] and config["project"]["model"]:
+        model_name = config["project"]["model"]
+        models = enterprise.models.Models(client)
+        modelinfo = models.get_model_by_name(project, model_name)
+        model = modelinfo.get_model()
+        scad_dump = modelinfo.get_scad()
+        scenario = client.scenarios.get_scenario_by_name(project = project,
+            name = config["project"]["scenario"])
+    else:
+        logging.critical('Could not find simulation id or model name in ' +
+            'coa.ini config file.')
+        print('Could not find simulation id or model name in',
+            'coa.ini config file.')
+        return ERROR_INCORRECT_CONFIG
+
+    simulation, simres = create_simulation(client = client,
+        scenario = scenario, name = "Initial Simulation",
+        model = model, iteration = -1)
+
+    if not simres:
+        return ERROR_FAILED_SIM
 
     # download the model
     datapath = 'data-models'
@@ -249,8 +236,7 @@ if __name__ == "__main__":
     unzip_dir_path = "{}/{}".format(model_dir_path, unzip_dir)
     with zipfile.ZipFile(model_path, 'r') as zip_ref:
         zip_ref.extractall(unzip_dir_path)
-    #eom_path = "{}/{}.eom".format(unzip_dir_path, modelinfo.name)
-    eom_path = "{}/{}.eom".format(unzip_dir_path, simulation.name)
+    eom_path = "{}/{}.eom".format(unzip_dir_path, model_name)
 
     # delete the downloaded model file
     os.remove(model_path)
@@ -259,7 +245,6 @@ if __name__ == "__main__":
     with open(eom_path, 'rt') as f:
         tree = ET.parse(f)
         root = tree.getroot()
-
 
     model_dict_list = []
 
@@ -271,121 +256,68 @@ if __name__ == "__main__":
         model_dict["attributesJsonString"] = json.loads(object.attrib['attributesJsonString'])
         model_dict_list.append(model_dict)
 
-
-    # Fetch scenario
-    scenarios = enterprise.scenarios.Scenarios(client)
-    scenario = client.scenarios.get_scenario_by_name(project, "soccrates")
-
-    logging.info('New scenario created.')
-
     raw_tunings = []
 
     previous = {}
-    data = read_json_file(JSON_FILENAME)
+    data = read_json_file(RESULTS_FILENAME)
     if "CoAs" not in data.keys():
         data["CoAs"] = []
 
-    MAX_ITERATIONS = 100
     for main_i in range(MAX_ITERATIONS):
         logging.debug(f'Current results at iteration {main_i}:\n' +
             json.dumps(data, indent = 2))
         if "initialTTC" not in data.keys():
             data["initialTTC"] = {}
 
-        # create simulation
-        simres = {}
-        simulation = None
-        MAX_RETRIES = 5
-        retries = 0
-        samples = 100
-
-        while retries < MAX_RETRIES:
-            try:
-                if main_i == 0:
-                    simulation = client.simulations.get_simulation_by_simid(scenario, simID)
-                    logging.info("Fetched initial simulation.")
-                else:
-                    base_model.model["samples"] = samples
-                    logging.info(f'For iteration {main_i} create new ' +
-                        'simulation with the following tunings:\n' +
-                        json.dumps(raw_tunings, indent = 2))
-                    simulation = client.simulations.create_simulation(scenario,
-                        name="AB w/T i=" + str(main_i) + " s=" + str(samples),
-                        model=base_model,
-                        raw_tunings=raw_tunings)
-
-                # get ttc values
-                simres = simulation.get_results()
-                break
-
-            except Exception as e:
-                retries += 1
-                samples = samples + 100 * retries
-                logging.warning(f"Simulation failed with:\n{e}" +
-                    "Retrying failed simulation with more samples.\n" +
-                    f"Retries:{retries}. Retrying with {samples} samples.")
-
-        if simulation is None:
-            logging.error("Simulation failed")
-            break
-
         ttcs = {}
         ttcx = {}
         saved_simid = simres["simid"]
-        data["final_simid"] = saved_simid
-        data["initial_simid"] = simID
+        if "simID" in config["project"] and config["project"]["simID"]:
+            data["final_simid"] = saved_simid
+            data["initial_simid"] = simID
+        if "model" in config["project"] and config["project"]["model"]:
+            data["initial_ids"] = {"pid": project.pid, "tid": scenario.tid, "simid": "1"}
+
         for risks_i in simres["results"]["risks"]:
             ttcs[risks_i["attackstep_id"]] = [round(float(risks_i["ttc5"]), 3), round(float(risks_i["ttc50"]), 3), round(float(risks_i["ttc95"]), 3)]
             ttcx[risks_i["attackstep_id"]] = [round(float(risks_i["ttc5"]), 3), round(float(risks_i["ttc50"]), 3)]
 
+            initial_ttcs_json = ttcs[risks_i["attackstep_id"]]
+            for i in model_dict_list:
+                if i['exportedId'] == risks_i['object_id']:
+                    refnumber = risks_i['object_id']
+                    try:
+                        refnumber = i['attributesJsonString']['ref']
+                    except:
+                        pass
+            risk_index = refnumber + "." + risks_i['attackstep']
             if main_i == 0:
-                initial_ttcs_json = ttcs[risks_i["attackstep_id"]]
-                for i in model_dict_list:
-                    if i['exportedId'] == risks_i['object_id']:
-                        refnumber = risks_i['object_id']
-                        try:
-                            refnumber = i['attributesJsonString']['ref']
-                        except:
-                            pass
-                risk_index = refnumber + "." + risks_i['attackstep']
                 data["initialTTC"][risk_index] = initial_ttcs_json
             else:
-                initial_ttcs_json = ttcs[risks_i["attackstep_id"]]
                 coa_index = len(data["CoAs"]) - 1
                 if "coaTTC" not in data["CoAs"][coa_index].keys():
                     data["CoAs"][coa_index]["coaTTC"] = {}
-
-                for i in model_dict_list:
-                    if i['exportedId'] == risks_i['object_id']:
-                        refnumber = risks_i['object_id']
-                        try:
-                            refnumber = i['attributesJsonString']['ref']
-                        except:
-                            pass
-                risk_index = refnumber + "." + risks_i['attackstep']
-
                 data["CoAs"][coa_index]["coaTTC"][risk_index] = initial_ttcs_json
                 data["CoAs"][coa_index]["report_url"] = simres["report_url"]
 
-            write_json_file(JSON_FILENAME,data)
+        write_json_file(RESULTS_FILENAME, data)
         steps_of_interest = ["{}".format(risks_i["attackstep_id"]) for risks_i in simres["results"]["risks"]]
         logging.debug("Steps of interest are:\n" +
             json.dumps(steps_of_interest, indent = 2))
 
-        if main_i == 0:
-            previous = ttcx
-        else:
+        if main_i != 0:
             eff = efficiency(previous, ttcx)
-            previous = ttcx
             logging.debug(f"Efficiency for step {main_i} is {eff}")
             data["CoAs"][coa_index]["efficiency"] = str(eff)
-            write_json_file(JSON_FILENAME, data)
+            write_json_file(RESULTS_FILENAME, data)
+
+        previous = ttcx
 
         attack_paths = []
 
         # get selected critical paths - where ttc5 is less than infinity
         for risks_i in simres["results"]["risks"]:
-            if round(float(risks_i["ttc5"]), 3) == temp_inf:
+            if round(float(risks_i["ttc5"]), 3) == TEMP_INF:
                 continue
             cri_path = simulation.get_critical_paths([risks_i["attackstep_id"]])
             logging.debug("Critical path fetched:\n" +
@@ -395,9 +327,9 @@ if __name__ == "__main__":
             attack_paths.append(ag)
 
         if len(attack_paths) == 0:
-            exit()
-
-        # code for debugging
+            logging.info("Simulation terminating successfully after " +
+                "protecting all of the high value assets.")
+            return SUCCESS
 
         graph = merge_attack_graphs(attack_paths)
 
@@ -405,15 +337,14 @@ if __name__ == "__main__":
         for i in range(len(crit_metric)):
             graph.find_critical_attack_step(crit_metric[i])
 
-        write_json_file(JSON_FILENAME,data)
-        try:
-            best_def_info, budget_remaining = graph.find_best_defense(lang_meta, model_dict_list, budget_remaining)
-            data = read_json_file(JSON_FILENAME)
-
+        write_json_file(RESULTS_FILENAME, data)
+        best_def_info, budget_remaining = graph.find_best_defense(lang_meta, model_dict_list, budget_remaining)
+        data = read_json_file(RESULTS_FILENAME)
+        if (best_def_info):
             logging.info(f"Best defence for iteration {main_i} is:\n" +
                 json.dumps(best_def_info, indent = 2))
-            logging.info(f"Remaining budget after iteration {main_i} is",
-                f"{remaining_budget}")
+            logging.info(f"Remaining budget after iteration {main_i} is " +
+                f"{budget_remaining}")
             raw_tunings.append(
                 {
                     "type": "probability",
@@ -423,10 +354,21 @@ if __name__ == "__main__":
                     "probability": 1.0
                 }
             )
-        except:
-            logging.error("Error with defense fetching, maybe UUID??")
-            data = read_json_file(JSON_FILENAME)
+        else:
+            logging.error("Failed to find an applicable defence for " +
+                f"iteration {main_i}.")
+            return ERROR_NO_DEFENCE
+        data = read_json_file(RESULTS_FILENAME)
 
+        simulation, simres = create_simulation(client = client,
+            scenario = scenario, name="AB w/T i=" + str(main_i),
+            iteration = main_i, model = model, tunings = raw_tunings)
+
+        if not simres:
+            return ERROR_FAILED_SIM
+
+if __name__ == "__main__":
+    exit(run_coa())
 
 @app.route('/', methods=["POST"])
 def hello():
