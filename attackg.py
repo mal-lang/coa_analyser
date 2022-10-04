@@ -293,6 +293,9 @@ class AttackGraph(nx.DiGraph):
             else:
                 logging.info("No defence was available for Attack step:" +
                     f"{top_attack_step}")
+        logging.warning("No defence was available for any of the " +
+            "attack steps.")
+        return None, None
 
 
 def merge_attack_graphs(graphs):

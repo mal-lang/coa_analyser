@@ -16,6 +16,7 @@ import sys
 import warnings
 import time
 import logging
+import argparse
 
 def read_json_file(filename):
     if os.path.isfile(filename):
@@ -28,12 +29,7 @@ def write_json_file(filename, data):
     with open(filename, 'w') as f:
         json.dump(data, f, indent = 4)
 
-RESULTS_FILENAME = "results.json"
-LOG_FILENAME = "log.txt"
-
 TEMP_INF = 1.7976931348623157e+308
-INITIAL_BUDGET = 2000
-MAX_ITERATIONS = 100
 
 SUCCESS = 0
 ERROR_INCORRECT_CONFIG = 1
@@ -51,7 +47,7 @@ suppress = True
 if suppress and not sys.warnoptions:
     warnings.simplefilter("ignore")
 
-def efficiency(initial, final):
+def calculate_efficiency(initial, final):
     '''
     initial and final are dictionaries with the same keys, with values being lists of length at least two.
 
@@ -104,7 +100,6 @@ def create_simulation(client, scenario, name, iteration, model, tunings = []):
                 logging.debug(f'Ran new simulation {name} with:\n' +
                     json.dumps(simres, indent = 2))
                 return simulation, simres
-                break
 
             except Exception as e:
                 retries += 1
@@ -119,24 +114,62 @@ def create_simulation(client, scenario, name, iteration, model, tunings = []):
         print("Simulation failed")
         return None, None
 
+def update_costs_from_file(costsfile, lang_meta):
+    survey_costs = None
+    with open(costsfile, 'r') as f:
+        survey_costs = json.load(f)
+
+    logging.debug(f"Costs updates found in {costsfile}:\n" +
+        json.dumps(survey_costs, indent = 2))
+
+    for asset in lang_meta["assets"]:
+        for defence in lang_meta["assets"][asset]["defenses"]:
+            if asset in survey_costs and \
+                defence["name"] in survey_costs[asset]:
+                defence["metaInfo"]["cost"] = survey_costs[asset][defence["name"]]
+                defence["metaInfo"]["cost_time"] = [30, 10]
+
+
 def run_coa():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-l', '--logfile', default='log.txt',
+        help='filename to use for the log (default: %(default)s)')
+    parser.add_argument('-c', '--configfile', default='coa.ini',
+        help='filename to use for the configuration (default: %(default)s)')
+    parser.add_argument('-o', '--costsfile',
+        help='filename to use for the costs')
+    parser.add_argument('-r', '--resultsfile', default='results.json',
+        help='filename to use for the results (default: %(default)s)')
+    parser.add_argument('-m', '--max_iterations', type=int, default=100,
+        help='number of maximum simulation iterations the analyser will ' +
+            'run (default: %(default)s)')
+    parser.add_argument('-b', '--initial_budget', type=int, default=1000,
+        help='initial budget (default: %(default)s)')
+
+    args = vars(parser.parse_args())
+    logfile = args['logfile']
+    configfile = args['configfile']
+    costsfile = args['costsfile']
+    resultsfile = args['resultsfile']
+    max_iterations = args['max_iterations']
+    initial_budget = args['initial_budget']
+
     logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
                     datefmt='%m-%d %H:%M',
-                    filename=LOG_FILENAME,
+                    filename=logfile,
                     filemode='w')
 
-    if os.path.isfile(RESULTS_FILENAME):
-        os.remove(RESULTS_FILENAME)
+    if os.path.isfile(resultsfile):
+        os.remove(resultsfile)
     config = configparser.ConfigParser()
-    config.read('coa.ini')
+    config.read(configfile)
 
-    budget_remaining = INITIAL_BUDGET
+    budget_remaining = initial_budget
     logging.info(f"Starting budget: {budget_remaining}")
 
     # Create an authenticated enterprise client
-    # to get the results with the simid and get the model_id by taking
-    # results["model_data"]["mid"] and then model = get_model_by_mid(model_id)
 
     logging.info("Log in to Enterprise.")
     client = enterprise.client(
@@ -152,22 +185,10 @@ def run_coa():
     # The SDK method client.metadata.get_metadata() will not provide everything needed.
     lang_meta = client._get("metadata")
 
-    survey_costs = None
-    with open('./costs_survey.json', 'r') as f:
-        survey_costs = json.load(f)
-
-    logging.debug("Survey costs found.\n" +
-        json.dumps(survey_costs, indent = 2))
-
-    for asset in lang_meta["assets"]:
-        for defence in lang_meta["assets"][asset]["defenses"]:
-            if asset in survey_costs and \
-                defence["name"] in survey_costs[asset]:
-                defence["metaInfo"]["cost"] = survey_costs[asset][defence["name"]]
-                defence["metaInfo"]["cost_time"] = [30, 10]
-
-    logging.debug("Client's language metadata:\n" +
-        json.dumps(lang_meta, indent = 2))
+    if (costsfile):
+        update_costs_from_file(costsfile, lang_meta)
+        logging.debug("Client's language metadata after costs update:\n" +
+            json.dumps(lang_meta, indent = 2))
 
     if "project" in config and "name" in config["project"] and \
         config["project"]["name"]:
@@ -177,9 +198,18 @@ def run_coa():
 
     else:
         logging.critical('Could not find project or project name in ' +
-            'coa.ini config file.')
+            f'{configfile} config file.')
         print('Could not find project or project name in',
-            'coa.ini config file.')
+            f'{configfile} config file.')
+        return ERROR_INCORRECT_CONFIG
+
+    if  "scenario" in config["project"] and config["project"]["scenario"]:
+        scenario = client.scenarios.get_scenario_by_name(project = project,
+            name = config["project"]["scenario"])
+    else:
+        logging.critical(f'Could not find scenario in {configfile} '
+            + 'config file.')
+        print(f'Could not find scenario in {configfile} config file.')
         return ERROR_INCORRECT_CONFIG
 
     if "simID" in config["project"] and config["project"]["simID"]:
@@ -187,8 +217,6 @@ def run_coa():
         res = client._post("model/file", data={"pid": project.pid, "mids": [simID]})
         base_model_dict = client._post("model/json", data={"pid": project.pid, "mids": [simID]})
         model = Model(base_model_dict)
-        scenario = client.scenarios.get_scenario_by_name(project = project,
-            name = config["project"]["scenario"])
         resp = client._post("scenarios", data={"pid": project.pid})
         logging.info(f"Loaded initial simulation with project name: " +
             f"{project_name} and simulation id: {simID}")
@@ -204,13 +232,11 @@ def run_coa():
         modelinfo = models.get_model_by_name(project, model_name)
         model = modelinfo.get_model()
         scad_dump = modelinfo.get_scad()
-        scenario = client.scenarios.get_scenario_by_name(project = project,
-            name = config["project"]["scenario"])
     else:
         logging.critical('Could not find simulation id or model name in ' +
-            'coa.ini config file.')
+            f'{configfile} config file.')
         print('Could not find simulation id or model name in',
-            'coa.ini config file.')
+            f'{configfile} config file.')
         return ERROR_INCORRECT_CONFIG
 
     simulation, simres = create_simulation(client = client,
@@ -259,11 +285,11 @@ def run_coa():
     raw_tunings = []
 
     previous = {}
-    data = read_json_file(RESULTS_FILENAME)
+    data = read_json_file(resultsfile)
     if "CoAs" not in data.keys():
         data["CoAs"] = []
 
-    for main_i in range(MAX_ITERATIONS):
+    for main_i in range(max_iterations):
         logging.debug(f'Current results at iteration {main_i}:\n' +
             json.dumps(data, indent = 2))
         if "initialTTC" not in data.keys():
@@ -300,16 +326,16 @@ def run_coa():
                 data["CoAs"][coa_index]["coaTTC"][risk_index] = initial_ttcs_json
                 data["CoAs"][coa_index]["report_url"] = simres["report_url"]
 
-        write_json_file(RESULTS_FILENAME, data)
+        write_json_file(resultsfile, data)
         steps_of_interest = ["{}".format(risks_i["attackstep_id"]) for risks_i in simres["results"]["risks"]]
         logging.debug("Steps of interest are:\n" +
             json.dumps(steps_of_interest, indent = 2))
 
         if main_i != 0:
-            eff = efficiency(previous, ttcx)
+            eff = calculate_efficiency(previous, ttcx)
             logging.debug(f"Efficiency for step {main_i} is {eff}")
             data["CoAs"][coa_index]["efficiency"] = str(eff)
-            write_json_file(RESULTS_FILENAME, data)
+            write_json_file(resultsfile, data)
 
         previous = ttcx
 
@@ -337,9 +363,9 @@ def run_coa():
         for i in range(len(crit_metric)):
             graph.find_critical_attack_step(crit_metric[i])
 
-        write_json_file(RESULTS_FILENAME, data)
+        write_json_file(resultsfile, data)
         best_def_info, budget_remaining = graph.find_best_defense(lang_meta, model_dict_list, budget_remaining)
-        data = read_json_file(RESULTS_FILENAME)
+        data = read_json_file(resultsfile)
         if (best_def_info):
             logging.info(f"Best defence for iteration {main_i} is:\n" +
                 json.dumps(best_def_info, indent = 2))
@@ -358,7 +384,7 @@ def run_coa():
             logging.error("Failed to find an applicable defence for " +
                 f"iteration {main_i}.")
             return ERROR_NO_DEFENCE
-        data = read_json_file(RESULTS_FILENAME)
+        data = read_json_file(resultsfile)
 
         simulation, simres = create_simulation(client = client,
             scenario = scenario, name="AB w/T i=" + str(main_i),
@@ -366,6 +392,13 @@ def run_coa():
 
         if not simres:
             return ERROR_FAILED_SIM
+
+    logging.error("Ran the maximum number of " +
+    f"simulations allowed({max_iterations}) without finding all the " +
+    "defences required to stop all of the attacks on high value assets.")
+    print("Ran the maximum number of " +
+    f"simulations allowed({max_iterations}) without finding all the " +
+    "defences required to stop all of the attacks on high value assets.")
 
 if __name__ == "__main__":
     exit(run_coa())
