@@ -1,22 +1,17 @@
-import base64
-
 from securicad import enterprise
+from securicad.model import Model
 import configparser
-import re
+import argparse
+import logging
 import json
 import zipfile
-import shutil
+import base64
 import os
-from securicad.model import Model
 import xml.etree.ElementTree as ET
-import json
 import numpy as np
 from attackg import AttackGraph, merge_attack_graphs
 import sys
 import warnings
-import time
-import logging
-import argparse
 
 def read_json_file(filename):
     if os.path.isfile(filename):
@@ -38,47 +33,45 @@ ERROR_NO_DEFENCE = 3
 
 MAX_SIMULATION_CREATION_RETRIES = 5
 
-from flask import Flask, request
-
-app = Flask(__name__)
-
 # suppressing HTTPS insecure connection warnings
 suppress = True
 if suppress and not sys.warnoptions:
     warnings.simplefilter("ignore")
 
-def calculate_efficiency(initial, final):
+def calculate_efficiency(previous_ttcs, current_ttcs):
     '''
-    initial and final are dictionaries with the same keys, with values being lists of length at least two.
+    previous_ttcs and current_ttcs are dictionaries with the same keys, with
+    values being lists of length at least two.
 
-    initial[x][0] = initial ttc5 for the attack step x
-    initial[x][1] = initial ttc50 for the attack step x
+    previous_ttcs[x][0] = previous_ttcs ttc5 for the attack step x
+    previous_ttcs[x][1] = previous_ttcs ttc50 for the attack step x
 
-    final[x][0] = final ttc5 for the attack step x
-    final[x][1] = final ttc50 for the attack step x
+    current_ttcs[x][0] = current_ttcs ttc5 for the attack step x
+    current_ttcs[x][1] = current_ttcs ttc50 for the attack step x
 
-    NOTE: securiCAD migth return initial ttc5 equal to zero. this is not good for this efficiency metric.
-    also, it doesn't make sense for the attack steps that are not initially compromised.
-    so, initial 0 values will be changed to 0.001
+    NOTE: securiCAD migth return previous ttc5 equal to zero. this is not good
+    for this efficiency metric. Also, it doesn't make sense for the attack
+    steps that are not initially compromised. So, previous_ttcs 0 values will
+    be changed to 0.001
     '''
     result = 0
     c = 150
-    for x in initial:
-        initial5 = max(initial[x][0], 0.001)
-        initial50 = max(initial[x][1], 0.001)
-        final5 = max(final[x][0], 0.001)
-        final50 = max(final[x][1], 0.001)
-        logging.debug(f"within Efficiency ttc5: {initial[x][0]} " +
-            f"ttc50: {initial[x][1]}")
-        if initial[x][0] != TEMP_INF:
-            if initial[x][1] == TEMP_INF:
+    for x in previous_ttcs:
+        previous_ttcs5 = max(previous_ttcs[x][0], 0.001)
+        previous_ttcs50 = max(previous_ttcs[x][1], 0.001)
+        current_ttcs5 = max(current_ttcs[x][0], 0.001)
+        current_ttcs50 = max(current_ttcs[x][1], 0.001)
+        logging.debug(f"within Efficiency ttc5: {previous_ttcs[x][0]} " +
+            f"ttc50: {previous_ttcs[x][1]}")
+        if previous_ttcs[x][0] != TEMP_INF:
+            if previous_ttcs[x][1] == TEMP_INF:
                 # ttc5_i is finite, ttc50_i is not
-                result += np.power(1.05, -initial5) * min(final5 - initial5, c)
+                result += np.power(1.05, -previous_ttcs5) * min(current_ttcs5 - previous_ttcs5, c)
             else:
                 # ttc5_i is finite, ttc50_i is also finite
-                result += np.power(1.05, -initial5) * \
-                    min(final5 - initial5, c) + np.power(1.05, -initial50) * \
-                    min( final50 - initial50, c)
+                result += np.power(1.05, -previous_ttcs5) * \
+                    min(current_ttcs5 - previous_ttcs5, c) + np.power(1.05, -previous_ttcs50) * \
+                    min(current_ttcs50 - previous_ttcs50, c)
     return round(result, 3)
 
 def create_simulation(client, scenario, name, iteration, model, tunings = []):
@@ -292,11 +285,10 @@ def run_coa():
     for main_i in range(max_iterations):
         logging.debug(f'Current results at iteration {main_i}:\n' +
             json.dumps(data, indent = 2))
-        if "initialTTC" not in data.keys():
-            data["initialTTC"] = {}
+        if "previous_TTC" not in data.keys():
+            data["previous_TTC"] = {}
 
         ttcs = {}
-        ttcx = {}
         saved_simid = simres["simid"]
         if "simID" in config["project"] and config["project"]["simID"]:
             data["final_simid"] = saved_simid
@@ -306,9 +298,8 @@ def run_coa():
 
         for risks_i in simres["results"]["risks"]:
             ttcs[risks_i["attackstep_id"]] = [round(float(risks_i["ttc5"]), 3), round(float(risks_i["ttc50"]), 3), round(float(risks_i["ttc95"]), 3)]
-            ttcx[risks_i["attackstep_id"]] = [round(float(risks_i["ttc5"]), 3), round(float(risks_i["ttc50"]), 3)]
 
-            initial_ttcs_json = ttcs[risks_i["attackstep_id"]]
+            previous_ttcs_json = ttcs[risks_i["attackstep_id"]]
             for i in model_dict_list:
                 if i['exportedId'] == risks_i['object_id']:
                     refnumber = risks_i['object_id']
@@ -318,12 +309,12 @@ def run_coa():
                         pass
             risk_index = refnumber + "." + risks_i['attackstep']
             if main_i == 0:
-                data["initialTTC"][risk_index] = initial_ttcs_json
+                data["previous_TTC"][risk_index] = previous_ttcs_json
             else:
                 coa_index = len(data["CoAs"]) - 1
                 if "coaTTC" not in data["CoAs"][coa_index].keys():
                     data["CoAs"][coa_index]["coaTTC"] = {}
-                data["CoAs"][coa_index]["coaTTC"][risk_index] = initial_ttcs_json
+                data["CoAs"][coa_index]["coaTTC"][risk_index] = previous_ttcs_json
                 data["CoAs"][coa_index]["report_url"] = simres["report_url"]
 
         write_json_file(resultsfile, data)
@@ -332,12 +323,12 @@ def run_coa():
             json.dumps(steps_of_interest, indent = 2))
 
         if main_i != 0:
-            eff = calculate_efficiency(previous, ttcx)
+            eff = calculate_efficiency(previous_ttcs, ttcs)
             logging.debug(f"Efficiency for step {main_i} is {eff}")
             data["CoAs"][coa_index]["efficiency"] = str(eff)
             write_json_file(resultsfile, data)
 
-        previous = ttcx
+        previous_ttcs = ttcs
 
         attack_paths = []
 
@@ -364,7 +355,8 @@ def run_coa():
             graph.find_critical_attack_step(crit_metric[i])
 
         write_json_file(resultsfile, data)
-        best_def_info, budget_remaining = graph.find_best_defense(lang_meta, model_dict_list, budget_remaining)
+        best_def_info, budget_remaining = graph.find_best_defense(lang_meta,
+            model_dict_list, budget_remaining, resultsfile)
         data = read_json_file(resultsfile)
         if (best_def_info):
             logging.info(f"Best defence for iteration {main_i} is:\n" +
@@ -402,32 +394,3 @@ def run_coa():
 
 if __name__ == "__main__":
     exit(run_coa())
-
-@app.route('/', methods=["POST"])
-def hello():
-    if request.is_json:
-        request_data = request.get_json()
-        print("JSON Simulation ID : {}".format(request_data['simulationId']))
-    else:
-        req = request.data
-        print("request.data : {}".format(request.data))
-        request_data = json.loads(req.decode('ascii'))
-        print("Non JSON Simulation ID : {}".format(request_data['simulationId']))
-
-    results = '{'
-    with open('newTestsResults.txt', 'w') as f:
-        f.write(results)
-
-    #connect(1)
-
-    results =  ']}'
-    with open('newTestsResults.txt', 'a') as f:
-        f.write(results)
-
-    with open("newTestsResults.txt", "rb") as fin:
-        content = json.load(fin)
-    with open("stringJson.txt", "w") as fout:
-        json.dump(content, fout, indent = 1)
-        R = json.dumps(content)
-
-    return R

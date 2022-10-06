@@ -1,13 +1,7 @@
 import json
 import os
 import networkx as nx
-from random import randint
-from random import seed
 import logging
-
-
-seed(1)
-JSON_FILENAME = "results.json"
 
 def read_json_file(filename):
     if os.path.isfile(filename):
@@ -128,8 +122,9 @@ class AttackGraph(nx.DiGraph):
         return
 
 
-    def find_best_defense(self, meta_lang, model_dict_list, budget_remaining):
-        data = read_json_file(JSON_FILENAME)
+    def find_best_defense(self, meta_lang, model_dict_list,
+        budget_remaining, resultsfile):
+        data = read_json_file(resultsfile)
 
         def_cost_list_dict={}
         for top_attack_step in self.nodes_sorted:
@@ -198,9 +193,6 @@ class AttackGraph(nx.DiGraph):
                                         if this_cost_mc:
                                             monetary_cost = json.dumps(this_cost_mc)
 
-                                            results = '"Monetary Cost of defense is: " {} \n'.format(monetary_cost)
-                                            defense_detail = json.dumps(key[:-3])
-                                            results = '"Name of defense is: " {} \n'.format(defense_detail)
                                             if budget_remaining > int(this_cost_mc):
                                                 changed_budget = budget_remaining - int(this_cost_mc)
                                                 data["CoAs"].append({})
@@ -212,7 +204,7 @@ class AttackGraph(nx.DiGraph):
                                                 data["CoAs"][-1]["defenses"].append({"ref": def_costs["ref"], "defenseName":  key[:-3], "defenseInfo":  key[:-3] + " is used"})
                                                 self.nodes[node]["ref"] = def_costs["ref"]
 
-                                                write_json_file(JSON_FILENAME, data)
+                                                write_json_file(resultsfile, data)
 
                                                 logging.debug("Defence fits into the budget " +
                                                     "and therefore can be applied");
@@ -267,7 +259,7 @@ class AttackGraph(nx.DiGraph):
                                 data["CoAs"][-1]["defenses"].append({"ref": def_costs["ref"], "defenseName": def_name, "defenseInfo": def_name + " is used" })
                                 self.nodes[node]["ref"] = def_costs["ref"]
 
-                                write_json_file(JSON_FILENAME, data)
+                                write_json_file(resultsfile, data)
 
 
                                 results = '"Name of defense is: " {} \n'.format(def_name)
