@@ -30,6 +30,7 @@ SUCCESS = 0
 ERROR_INCORRECT_CONFIG = 1
 ERROR_FAILED_SIM = 2
 ERROR_NO_DEFENCE = 3
+ERROR_UNKNOWN_METRIC = 4
 
 MAX_SIMULATION_CREATION_RETRIES = 5
 
@@ -132,7 +133,9 @@ def run_coa():
         help='filename to use for the costs')
     parser.add_argument('-r', '--resultsfile', default='results.json',
         help='filename to use for the results (default: %(default)s)')
-    parser.add_argument('-m', '--max_iterations', type=int, default=100,
+    parser.add_argument('-m', '--metric', default='frequency',
+        help='metric used to find the most critical attack step (default: %(default)s)')
+    parser.add_argument('-i', '--max_iterations', type=int, default=100,
         help='number of maximum simulation iterations the analyser will ' +
             'run (default: %(default)s)')
     parser.add_argument('-b', '--initial_budget', type=int, default=1000,
@@ -143,6 +146,7 @@ def run_coa():
     configfile = args['configfile']
     costsfile = args['costsfile']
     resultsfile = args['resultsfile']
+    metric = args['metric']
     max_iterations = args['max_iterations']
     initial_budget = args['initial_budget']
 
@@ -348,9 +352,8 @@ def run_coa():
 
         graph = merge_attack_graphs(attack_paths)
 
-        crit_metric = ['o', 'f']
-        for i in range(len(crit_metric)):
-            graph.find_critical_attack_step(crit_metric[i])
+        if (graph.find_critical_attack_step(metric) != 0):
+            return ERROR_UNKNOWN_METRIC
 
         write_json_file(resultsfile, data)
         best_def_info, budget_remaining = graph.find_best_defense(lang_meta,

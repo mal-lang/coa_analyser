@@ -72,32 +72,29 @@ class AttackGraph(nx.DiGraph):
 
     def find_critical_attack_step(self, metric):
         logging.debug("Find critical attack step")
-        metrics_for_nodes = {}
-        if metric == 'f':
-            for node in self.nodes:
-                if not self.nodes[node]["isDefense"]:
-                    metrics_for_nodes[node] = self.nodes[node]["frequency"]
-                    logging.debug(f'Node:{self.nodes[node]["id"]} ' +
-                        f'frequency:{self.nodes[node]["frequency"]}')
-        else:
-            weighted_out_degrees = {node: [sum([self.nodes[child]["frequency"] for child in self.successors(node)])] for
-                                    node in self.nodes}
-            if metric == 'o':
-                metrics_for_nodes = weighted_out_degrees
-        '''else:
-            weighted_out_degrees = {}
-            for node in self.nodes:
-                if not self.nodes[node]["isDefense"]:
-                    for child in self.successors(node):
-                        weighted_out_degrees[node] = sum(self.nodes[child]["frequency"])
-            if metric == 'o':
-                metrics_for_nodes = weighted_out_degrees
-            # we can put code for other metrics here like frequency-out degree combinations'''
+        node_metrics = {}
+        match metric:
+            case 'frequency':
+                for node in self.nodes:
+                    if not self.nodes[node]["isDefense"]:
+                        node_metrics[node] = self.nodes[node]["frequency"]
+                        logging.debug(f'Node:{self.nodes[node]["id"]} ' +
+                            f'frequency:{self.nodes[node]["frequency"]}')
 
-        # sorting is done depending on the metrics
-        if len(metric) == 1: # for 'f' and 'o' and not for 'fo' or 'of'
-            self.nodes_sorted = sorted(metrics_for_nodes, key=lambda key: (metrics_for_nodes[key]), reverse=True)
-            # we can put code for other metrics here like frequency-out degree combinations with metric length 2
+            case 'weighted_out_degrees':
+                weighted_out_degrees = {node: \
+                    [sum([self.nodes[child]["frequency"] \
+                    for child in self.successors(node)])] \
+                    for node in self.nodes}
+                node_metrics = weighted_out_degrees
+
+            case _:
+                logging.error('find_critical_attack_step was given ' +
+                    f'unkwnown metric: {metric}')
+                return -1
+
+        self.nodes_sorted = sorted(node_metrics,
+            key=lambda key: (node_metrics[key]), reverse=True)
 
         # assigning scores high to low on nodes according to the sorted order
         score = len(self.nodes_sorted)
@@ -107,19 +104,19 @@ class AttackGraph(nx.DiGraph):
                 # score is being assigned to the most critical attack step
                 self.nodes[node]["crit_score"] = score
             else:
-                if metrics_for_nodes[node] == metric_of_previous_node:
+                if node_metrics[node] == metric_of_previous_node:
                     # the metric of this node is the same as the previous one, so it will get the same criticality score
                     self.nodes[node]["crit_score"] = score
                 else:
                     self.nodes[node]["crit_score"] = score - 1
                     score -= 1
-            metric_of_previous_node = metrics_for_nodes[node]
+            metric_of_previous_node = node_metrics[node]
 
         logging.debug('Sorted nodes with criticality scores:')
         for node in self.nodes_sorted:
             logging.debug(f'{self.nodes[node]["id"]}\t' +
                 f'{self.nodes[node]["crit_score"]}')
-        return
+        return 0
 
 
     def find_best_defense(self, meta_lang, model_dict_list,
