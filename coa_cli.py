@@ -120,8 +120,6 @@ def update_costs_from_file(costsfile, lang_meta):
             if asset in survey_costs and \
                 defence["name"] in survey_costs[asset]:
                 defence["metaInfo"]["cost"] = survey_costs[asset][defence["name"]]
-                defence["metaInfo"]["cost_time"] = [30, 10]
-
 
 def run_coa():
 

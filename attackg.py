@@ -153,10 +153,8 @@ class AttackGraph(nx.DiGraph):
                                     def_costs = model_dict["attributesJsonString"]
 
                                     cost_mc=[]
-                                    cost_tc=[]
 
                                     this_cost_mc = None
-                                    this_cost_tc = None
 
                                     # Check all tags associated to the defense
                                     for key in def_costs:
@@ -173,20 +171,6 @@ class AttackGraph(nx.DiGraph):
                                                     this_cost_mc = cost_mc[0]
                                                     model_dict_list[idx]["attributesJsonString"][key] = [this_cost_mc]
                                                 logging.debug("Found user defined monetary cost" +
-                                                    " tag updating defence values to:\n" +
-                                                    model_dict_list[idx]["attributesJsonString"][key])
-
-                                            # If the tag ends with "_tc"
-                                            elif key[-3:] == "_tc":
-                                                cost_tc = def_costs[key].split(" ")
-                                                if len(cost_tc) > 1:
-                                                    this_cost_tc = cost_tc.pop(0)
-                                                    new_cost_tc_list = " ".join(cost_tc)
-                                                    model_dict_list[idx]["attributesJsonString"][key] = new_cost_tc_list
-                                                else:
-                                                    this_cost_mc = cost_tc[0]
-                                                    model_dict_list[idx]["attributesJsonString"][key] = [this_cost_tc]
-                                                logging.debug("Found user defined time cost" +
                                                     " tag updating defence values to:\n" +
                                                     model_dict_list[idx]["attributesJsonString"][key])
 
@@ -230,20 +214,13 @@ class AttackGraph(nx.DiGraph):
                                 break
 
                             def_class_cost = defense_info["metaInfo"]["cost"]
-                            def_class_cost_time = defense_info["metaInfo"]["cost_time"]
                             def_name = defense_info["name"]
                             current_mc = None
-                            current_tc = None
 
                             if len(def_class_cost) > 1:
                                 current_mc = def_class_cost.pop(0)
                             else:
                                 current_mc = def_class_cost[0]
-
-                            if len(def_class_cost_time) > 1:
-                                current_tc = def_class_cost_time.pop(0)
-                            else:
-                                current_tc = def_class_cost_time[0]
 
                             if budget_remaining > current_mc:
                                 changed_budget = budget_remaining - current_mc
