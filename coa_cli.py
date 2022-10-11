@@ -91,9 +91,12 @@ def create_simulation(client, scenario, name, iteration, model, tunings = []):
                 simulation = client.simulations.create_simulation(scenario,
                     name = name + " s=" + str(samples), model = model, raw_tunings = tunings)
                 simres = simulation.get_results()
-                logging.debug(f'Ran new simulation {name} with:\n' +
-                    json.dumps(simres, indent = 2))
-                return simulation, simres
+
+                if simres:
+                    logging.info(f'Simulation {name} ran successfully')
+                    logging.debug(f'Simulation results for {name}:\n' +
+                        json.dumps(simres, indent = 2))
+                    return simulation, simres
 
             except Exception as e:
                 retries += 1
@@ -117,10 +120,11 @@ def update_costs_from_file(costsfile, lang_meta):
         json.dumps(survey_costs, indent = 2))
 
     for asset in lang_meta["assets"]:
-        for defence in lang_meta["assets"][asset]["defenses"]:
+        for defense in lang_meta["assets"][asset]["defenses"]:
             if asset in survey_costs and \
-                defence["name"] in survey_costs[asset]:
-                defence["metaInfo"]["cost"] = survey_costs[asset][defence["name"]]
+                defense["name"] in survey_costs[asset]:
+                defense["metaInfo"]["cost"] = survey_costs[asset][defense["name"]]
+                defense["metaInfo"]["use_counter"] = 0
 
 def run_coa():
 
@@ -360,7 +364,7 @@ def run_coa():
             model_dict_list, budget_remaining, resultsfile)
         data = read_json_file(resultsfile)
         if (best_def_info):
-            logging.info(f"Best defence for iteration {main_i} is:\n" +
+            logging.info(f"Best defense for iteration {main_i} is:\n" +
                 json.dumps(best_def_info, indent = 2))
             logging.info(f"Remaining budget after iteration {main_i} is " +
                 f"{budget_remaining}")
@@ -374,7 +378,7 @@ def run_coa():
                 }
             )
         else:
-            logging.error("Failed to find an applicable defence for " +
+            logging.error("Failed to find an applicable defense for " +
                 f"iteration {main_i}.")
             return ERROR_NO_DEFENCE
         data = read_json_file(resultsfile)
@@ -388,10 +392,10 @@ def run_coa():
 
     logging.error("Ran the maximum number of " +
     f"simulations allowed({max_iterations}) without finding all the " +
-    "defences required to stop all of the attacks on high value assets.")
+    "defenses required to stop all of the attacks on high value assets.")
     print("Ran the maximum number of " +
     f"simulations allowed({max_iterations}) without finding all the " +
-    "defences required to stop all of the attacks on high value assets.")
+    "defenses required to stop all of the attacks on high value assets.")
 
 if __name__ == "__main__":
     exit(run_coa())

@@ -118,6 +118,29 @@ class AttackGraph(nx.DiGraph):
                 f'{self.nodes[node]["crit_score"]}')
         return 0
 
+    def apply_defense(self, node, budget, cost, data, asset_tags,
+        defense_info, meta_lang, resultsfile):
+
+        def_costs = defense_info["metaInfo"]["cost"]
+        def_name = defense_info["name"]
+
+        budget = budget - cost
+
+        data["CoAs"].append({})
+        data["CoAs"][-1]["monetary_cost"] = {"1": int(cost)}
+        data["CoAs"][-1]["defenses"] = []
+        if len(data["CoAs"]) > 1:
+            data["CoAs"][-1]["defenses"] = data["CoAs"][-2]["defenses"].copy()
+        data["CoAs"][-1]["defenses"].append({"ref": asset_tags["ref"], "defenseName": def_name, "defenseInfo": def_name + " is used" })
+        self.nodes[node]["ref"] = asset_tags["ref"]
+        defense_info["metaInfo"]["use_counter"] += 1
+
+        write_json_file(resultsfile, data)
+
+        logging.info(f'Defense {def_name} on {self.nodes[node]["name"]}' +
+            f'(eid:{self.nodes[node]["eid"]}) with a cost of {cost} fit ' +
+            'into the budget and was therefore applied.')
+        return budget
 
     def find_best_defense(self, meta_lang, model_dict_list,
         budget_remaining, resultsfile):
@@ -139,128 +162,73 @@ class AttackGraph(nx.DiGraph):
             if no_of_def_for_i_node > 0:
                 for no_def in range(no_of_def_for_i_node):
                     best_def = max(block_range_def, key=block_range_def.get)
-                    logging.debug(f"Best defence candidate: {best_def}")
-                    not_enough_budget = False
+                    logging.debug(f"Best defense candidate: {best_def}")
                     for node in self.nodes:
                         if self.nodes[node]["id"] == best_def:
 
+                            costs_array = None
+
                             # Checking for user specified cost tags
                             for idx, model_dict in enumerate(model_dict_list):
+                                asset_tags = None
                                 if self.nodes[node]["eid"] == model_dict["exportedId"]:
-                                    def_costs = model_dict["attributesJsonString"]
-
-                                    cost_mc=[]
-
-                                    this_cost_mc = None
-
-                                    # Check all tags associated to the defense
-                                    for key in def_costs:
-                                        # If the tag has the same name of the defense
-                                        if self.nodes[node]["attackstep"] == key[:-3]:
-                                            # If the tag ends with "_mc"
-                                            if key[-3:] == '_mc':
-                                                cost_mc = def_costs[key].split(" ")
-                                                if len(cost_mc) > 1:
-                                                    this_cost_mc = cost_mc.pop(0)
-                                                    new_cost_mc_list = " ".join(cost_mc)
-                                                    model_dict_list[idx]["attributesJsonString"][key] = new_cost_mc_list
-                                                else:
-                                                    this_cost_mc = cost_mc[0]
-                                                    model_dict_list[idx]["attributesJsonString"][key] = [this_cost_mc]
-                                                logging.debug("Found user defined monetary cost" +
-                                                    " tag updating defence values to:\n" +
-                                                    model_dict_list[idx]["attributesJsonString"][key])
-
-                                        if this_cost_mc:
-                                            monetary_cost = json.dumps(this_cost_mc)
-
-                                            if budget_remaining > int(this_cost_mc):
-                                                changed_budget = budget_remaining - int(this_cost_mc)
-                                                data["CoAs"].append({})
-                                                data["CoAs"][-1]["monetary_cost"] = {"1": int(this_cost_mc)}
-
-                                                data["CoAs"][-1]["defenses"] = []
-                                                if len(data["CoAs"]) > 1:
-                                                    data["CoAs"][-1]["defenses"] = data["CoAs"][-2]["defenses"].copy()
-                                                data["CoAs"][-1]["defenses"].append({"ref": def_costs["ref"], "defenseName":  key[:-3], "defenseInfo":  key[:-3] + " is used"})
-                                                self.nodes[node]["ref"] = def_costs["ref"]
-
-                                                write_json_file(resultsfile, data)
-
-                                                logging.debug("Defence fits into the budget " +
-                                                    "and therefore can be applied");
-                                                return self.nodes[node], changed_budget
-                                            else:
-                                                not_enough_budget = True
-                                                logging.debug("Defence is beyond the budget " +
-                                                    "and therefore cannot be applied");
-                                                block_range_def[best_def] = 0  # if both costs are high or no cost given
-                                                break
-
-                                if not_enough_budget:
+                                    asset_tags = model_dict["attributesJsonString"]
+                                    cost_tag_name = \
+                                        self.nodes[node]["attackstep"] + '_mc'
+                                    # If the tag has the same name of the defense
+                                    if cost_tag_name in asset_tags:
+                                        costs_array = asset_tags[cost_tag_name].split(" ")
+                                        logging.debug("Found user defined monetary cost" +
+                                            " tag updating defense values to:\n" +
+                                            model_dict_list[idx]["attributesJsonString"][cost_tag_name])
                                     break
-                            if not_enough_budget:
-                                break
+
+                            if not asset_tags:
+                                logging.warning('Failed to find asset in ' +
+                                'the model dictionary with eid:' +
+                                f'{self.nodes[node]["eid"]}.')
+                                continue
 
                             classdefs = meta_lang["assets"][self.nodes[node]["class"]]["defenses"]
                             defense_info = next((d for d in classdefs if d["name"] == self.nodes[node]["attackstep"]), False)
-                            if "cost" not in defense_info["metaInfo"]:
+                            # If there was no user defined tag containing the
+                            # cost look for one in the language costs
+                            if not costs_array and 'cost' in defense_info["metaInfo"]:
+                                costs_array = defense_info["metaInfo"]["cost"]
+                                logging.debug('Found language cost' +
+                                    ' for defense ' +
+                                    f'{defense_info["name"]}:\n' +
+                                    f'{costs_array}')
+
+                            if not costs_array:
                                 logging.info('No user defined tag or ' +
                                     'language cost was found for the ' +
-                                    f'{defense_info["name"]} defence');
+                                    f'{best_def} defense.')
                                 break
 
-                            def_class_cost = defense_info["metaInfo"]["cost"]
-                            def_name = defense_info["name"]
-                            current_mc = None
+                            use_counter = \
+                                defense_info["metaInfo"]["use_counter"]
+                            current_cost = costs_array[min(
+                                len(costs_array) - 1, use_counter)]
 
-                            if len(def_class_cost) > 1:
-                                current_mc = def_class_cost.pop(0)
+                            if budget_remaining > current_cost:
+                                return self.nodes[node], \
+                                    self.apply_defense(node,
+                                        budget_remaining, current_cost,
+                                        data, asset_tags, defense_info,
+                                        meta_lang, resultsfile)
                             else:
-                                current_mc = def_class_cost[0]
-
-                            if budget_remaining > current_mc:
-                                changed_budget = budget_remaining - current_mc
-                                monetary_cost = json.dumps(current_mc)
-                                results = '"Monetary Cost of defense is: " {} \n'.format(monetary_cost)
-
-                                data["CoAs"].append({})
-                                data["CoAs"][-1]["monetary_cost"] = {"1": int(current_mc)}
-
-                                data["CoAs"][-1]["defenses"] = []
-                                if len(data["CoAs"]) > 1:
-                                    data["CoAs"][-1]["defenses"] = data["CoAs"][-2]["defenses"].copy()
-                                data["CoAs"][-1]["defenses"].append({"ref": def_costs["ref"], "defenseName": def_name, "defenseInfo": def_name + " is used" })
-                                self.nodes[node]["ref"] = def_costs["ref"]
-
-                                write_json_file(resultsfile, data)
-
-
-                                results = '"Name of defense is: " {} \n'.format(def_name)
-                                logging.debug("Defence fits into the budget " +
-                                        "and therefore can be applied");
-                                return self.nodes[node], changed_budget
-                            else:
-                                not_enough_budget = True
                                 block_range_def[best_def] = 0  # if both costs are high or no cost given
-                                logging.debug("Defence is beyond the budget " +
-                                    "and therefore cannot be applied");
+                                logging.debug("Defense is beyond the budget " +
+                                    "and therefore cannot be applied.")
                                 break
 
-                            logging.info('No user defined tag or ' +
-                                'language cost was found for the ' +
-                                f'{defense_info["name"]} defence');
-                        if not_enough_budget:
-                        #TODO when the defense is out of budget wrt
-                        # top_attack_step (can be improved - once a defense out
-                        # of budget it should be removed totally)
-                            break
                     block_range_def[best_def] = 0  # if both costs are high or no cost given
             else:
-                logging.info("No defence was available for Attack step:" +
+                logging.info("No defense was available for Attack step:" +
                     f"{top_attack_step}")
-        logging.warning("No defence was available for any of the " +
-            "attack steps.")
+        logging.warning("No affordable defense was available for any of " +
+            "the attack steps.")
         return None, None
 
 
