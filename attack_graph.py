@@ -166,9 +166,12 @@ class AttackGraph(nx.DiGraph):
                                     # If the tag has the same name of the defense
                                     if cost_tag_name in asset_tags:
                                         costs_array = asset_tags[cost_tag_name].split(" ")
-                                        logging.debug("Found user defined monetary cost" +
-                                            " tag updating defense values to:\n" +
-                                            model_dict_list[idx]["attributesJsonString"][cost_tag_name])
+                                        logging.debug('Found user defined ' +
+                                            'monetary cost tag for ' +
+                                            f'{self.nodes[node]["attackstep"]}' +
+                                            f' on {self.nodes[node]["name"]}' +
+                                            f'(eid:{self.nodes[node]["eid"]}):\n' +
+                                            f'{costs_array}')
                                     break
 
                             if not asset_tags:
@@ -196,8 +199,15 @@ class AttackGraph(nx.DiGraph):
 
                             use_counter = \
                                 defense_info["metaInfo"]["use_counter"]
-                            current_cost = costs_array[min(
-                                len(costs_array) - 1, use_counter)]
+                            current_cost = int(costs_array[min(
+                                len(costs_array) - 1, use_counter)])
+                            logging.debug('Found the following costs_array ' +
+                                'costs_array for ' +
+                                f'{self.nodes[node]["attackstep"]} on ' +
+                                f'on {self.nodes[node]["name"]}: ' +
+                                f'{costs_array}, with a use counter of: ' +
+                                f'{use_counter}, resulting in a cost of: ' +
+                                f'{current_cost}')
 
                             if budget_remaining > current_cost:
                                 return self.nodes[node], \

@@ -134,6 +134,8 @@ def run_coa():
             'run (default: %(default)s)')
     parser.add_argument('-b', '--initial_budget', type=int, default=1000,
         help='initial budget (default: %(default)s)')
+    parser.add_argument('-n', '--simulation_name_prefix', default="",
+        help='simulation name prefix (default: %(default)s)')
 
     args = vars(parser.parse_args())
     logfile = args['logfile']
@@ -143,6 +145,7 @@ def run_coa():
     metric = args['metric']
     max_iterations = args['max_iterations']
     initial_budget = args['initial_budget']
+    simulation_name_prefix = args['simulation_name_prefix']
 
     logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
@@ -228,8 +231,12 @@ def run_coa():
             f'{configfile} config file.')
         return ERROR_INCORRECT_CONFIG
 
+    if simulation_name_prefix:
+        simulation_name = simulation_name_prefix + " " + model_name + " "
+    else:
+        simulation_name = model_name + " "
     simulation, simres = create_simulation(client = client,
-        scenario = scenario, name = "Initial Simulation",
+        scenario = scenario, name = simulation_name + "Initial Simulation",
         model = model, iteration = -1)
 
     if not simres:
@@ -374,7 +381,8 @@ def run_coa():
         data = read_json_file(resultsfile)
 
         simulation, simres = create_simulation(client = client,
-            scenario = scenario, name="AB w/T i=" + str(main_i),
+            scenario = scenario,
+            name = simulation_name + " i=" + str(main_i),
             iteration = main_i, model = model, tunings = raw_tunings)
 
         if not simres:
