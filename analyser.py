@@ -1,5 +1,7 @@
 from securicad import enterprise
 from securicad.model import Model
+from attack_graph import AttackGraph, merge_attack_graphs
+from json_helpers import read_json_file, write_json_file
 import configparser
 import argparse
 import logging
@@ -9,20 +11,8 @@ import base64
 import os
 import xml.etree.ElementTree as ET
 import numpy as np
-from attackg import AttackGraph, merge_attack_graphs
 import sys
 import warnings
-
-def read_json_file(filename):
-    if os.path.isfile(filename):
-        with open(filename, 'r') as json_file:
-            return json.load(json_file)
-    else:
-        return {}
-
-def write_json_file(filename, data):
-    with open(filename, 'w') as f:
-        json.dump(data, f, indent = 4)
 
 TEMP_INF = 1.7976931348623157e+308
 
