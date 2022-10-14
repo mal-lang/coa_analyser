@@ -109,7 +109,6 @@ class AttackGraph(nx.DiGraph):
     def apply_defense(self, node, budget, cost, data, asset_tags,
         defense_info, meta_lang, resultsfile):
 
-        def_costs = defense_info["metaInfo"]["cost"]
         def_name = defense_info["name"]
 
         budget = budget - cost
@@ -119,7 +118,11 @@ class AttackGraph(nx.DiGraph):
         data["CoAs"][-1]["defenses"] = []
         if len(data["CoAs"]) > 1:
             data["CoAs"][-1]["defenses"] = data["CoAs"][-2]["defenses"].copy()
-        data["CoAs"][-1]["defenses"].append({"ref": asset_tags["ref"], "defenseName": def_name, "defenseInfo": def_name + " is used" })
+        data["CoAs"][-1]["defenses"].append({"ref": asset_tags["ref"],
+            "defenseName": def_name,
+            "assetName": self.nodes[node]["name"],
+            "eid": self.nodes[node]["eid"],
+            "defenseInfo": def_name + " is used" })
         self.nodes[node]["ref"] = asset_tags["ref"]
         defense_info["metaInfo"]["use_counter"] += 1
 
@@ -197,6 +200,8 @@ class AttackGraph(nx.DiGraph):
                                     f'{best_def} defense.')
                                 break
 
+                            if not "use_counter" in defense_info["metaInfo"]:
+                                defense_info["metaInfo"]["use_counter"] = 0
                             use_counter = \
                                 defense_info["metaInfo"]["use_counter"]
                             current_cost = int(costs_array[min(

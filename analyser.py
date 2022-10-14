@@ -114,7 +114,6 @@ def update_costs_from_file(costsfile, lang_meta):
             if asset in survey_costs and \
                 defense["name"] in survey_costs[asset]:
                 defense["metaInfo"]["cost"] = survey_costs[asset][defense["name"]]
-                defense["metaInfo"]["use_counter"] = 0
 
 def run_coa():
 
