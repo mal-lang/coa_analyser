@@ -52,8 +52,6 @@ def calculate_efficiency(previous_ttcs, current_ttcs):
         previous_ttcs50 = max(previous_ttcs[x][1], 0.001)
         current_ttcs5 = max(current_ttcs[x][0], 0.001)
         current_ttcs50 = max(current_ttcs[x][1], 0.001)
-        logging.debug(f"within Efficiency ttc5: {previous_ttcs[x][0]} " +
-            f"ttc50: {previous_ttcs[x][1]}")
         if previous_ttcs[x][0] != TEMP_INF:
             if previous_ttcs[x][1] == TEMP_INF:
                 # ttc5_i is finite, ttc50_i is not
@@ -63,6 +61,11 @@ def calculate_efficiency(previous_ttcs, current_ttcs):
                 result += np.power(1.05, -previous_ttcs5) * \
                     min(current_ttcs5 - previous_ttcs5, c) + np.power(1.05, -previous_ttcs50) * \
                     min(current_ttcs50 - previous_ttcs50, c)
+        logging.debug(f"Calculating efficiency\nPrevious ttcs: "+
+            f"ttc5: {previous_ttcs[x][0]} ttc50: {previous_ttcs[x][1]}\n" +
+            f"Current ttcs: ttc5: {current_ttcs[x][0]} " +
+            f"ttc50: {current_ttcs[x][1]}\n" +
+            f"Resulting efficiency: {round(result, 3)}")
     return round(result, 3)
 
 def create_simulation(client, scenario, name, iteration, model, tunings = []):
@@ -114,6 +117,46 @@ def update_costs_from_file(costsfile, lang_meta):
             if asset in survey_costs and \
                 defense["name"] in survey_costs[asset]:
                 defense["metaInfo"]["cost"] = survey_costs[asset][defense["name"]]
+
+def load_model_dictionary(model_scad_dump, model_name):
+    # save the model locally
+    datapath = 'data-models'
+    if not os.path.exists(datapath):
+        os.makedirs(datapath)
+    model_path = "data-models/temp.sCAD"
+    f1 = open(model_path, "wb")
+    f1.write(model_scad_dump)
+    f1.close()
+
+    # unzip the model
+    model_dir_path = model_path[:model_path.rindex('/')]
+    model_file_name = model_path[model_path.rindex('/') + 1:model_path.rindex('.')]
+    unzip_dir = "scad_dir"
+    unzip_dir_path = "{}/{}".format(model_dir_path, unzip_dir)
+    with zipfile.ZipFile(model_path, 'r') as zip_ref:
+        zip_ref.extractall(unzip_dir_path)
+    eom_path = "{}/{}.eom".format(unzip_dir_path, model_name)
+
+    # delete the saved model file
+    os.remove(model_path)
+
+    # xml parsing
+    with open(eom_path, 'rt') as f:
+        tree = ET.parse(f)
+        root = tree.getroot()
+
+    model_dict_list = []
+
+    for object in root.iter("objects"):
+        model_dict = {}
+        model_dict["name"] = object.attrib['name']
+        model_dict["metaConcept"] = object.attrib['metaConcept']
+        model_dict["exportedId"] = object.attrib['exportedId']
+        model_dict["attributesJsonString"] = json.loads(object.attrib['attributesJsonString'])
+        model_dict_list.append(model_dict)
+
+    return model_dict_list
+
 
 def run_coa():
 
@@ -203,6 +246,9 @@ def run_coa():
         print(f'Could not find scenario in {configfile} config file.')
         return ERROR_INCORRECT_CONFIG
 
+    results = {}
+
+    # If a simulation id is specified we prioritise that over the model
     if "simID" in config["project"] and config["project"]["simID"]:
         simID = config["project"]["simID"]
         res = client._post("model/file", data={"pid": project.pid, "mids": [simID]})
@@ -216,6 +262,7 @@ def run_coa():
         simulation = client.simulations.get_simulation_by_simid(scenario, simID)
         model_name = simulation.name
         scad_dump = base64.b64decode(res["data"].encode("utf-8"), validate=True)
+        results["initial_simid"] = simID
 
     elif "model" in config["project"] and config["project"]["model"]:
         model_name = config["project"]["model"]
@@ -223,6 +270,7 @@ def run_coa():
         modelinfo = models.get_model_by_name(project, model_name)
         model = modelinfo.get_model()
         scad_dump = modelinfo.get_scad()
+        results["initial_ids"] = {"pid": project.pid, "tid": scenario.tid}
     else:
         logging.critical('Could not find simulation id or model name in ' +
             f'{configfile} config file.')
@@ -234,6 +282,8 @@ def run_coa():
         simulation_name = simulation_name_prefix + " " + model_name + " "
     else:
         simulation_name = model_name + " "
+
+    # Create an initial simulation to be used for the first iteration
     simulation, simres = create_simulation(client = client,
         scenario = scenario, name = simulation_name + "Initial Simulation",
         model = model, iteration = -1)
@@ -241,85 +291,37 @@ def run_coa():
     if not simres:
         return ERROR_FAILED_SIM
 
-    # download the model
-    datapath = 'data-models'
-    if not os.path.exists(datapath):
-        os.makedirs(datapath)
-    model_path = "data-models/temp.sCAD"
-    f1 = open(model_path, "wb")
-    f1.write(scad_dump)
-    f1.close()
-
-    # unzip the model
-    model_dir_path = model_path[:model_path.rindex('/')]
-    model_file_name = model_path[model_path.rindex('/') + 1:model_path.rindex('.')]
-    unzip_dir = "scad_dir"
-    unzip_dir_path = "{}/{}".format(model_dir_path, unzip_dir)
-    with zipfile.ZipFile(model_path, 'r') as zip_ref:
-        zip_ref.extractall(unzip_dir_path)
-    eom_path = "{}/{}.eom".format(unzip_dir_path, model_name)
-
-    # delete the downloaded model file
-    os.remove(model_path)
-
-    # xml parsing
-    with open(eom_path, 'rt') as f:
-        tree = ET.parse(f)
-        root = tree.getroot()
-
-    model_dict_list = []
-
-    for object in root.iter("objects"):
-        model_dict = {}
-        model_dict["name"] = object.attrib['name']
-        model_dict["metaConcept"] = object.attrib['metaConcept']
-        model_dict["exportedId"] = object.attrib['exportedId']
-        model_dict["attributesJsonString"] = json.loads(object.attrib['attributesJsonString'])
-        model_dict_list.append(model_dict)
+    model_dict_list = load_model_dictionary(scad_dump, model_name)
 
     raw_tunings = []
-
     previous = {}
-    data = read_json_file(resultsfile)
-    if "CoAs" not in data.keys():
-        data["CoAs"] = []
+    results["CoAs"] = []
+    results["initial_TTC"] = {}
 
     for main_i in range(max_iterations):
-        logging.debug(f'Current results at iteration {main_i}:\n' +
-            json.dumps(data, indent = 2))
-        if "previous_TTC" not in data.keys():
-            data["previous_TTC"] = {}
+        logging.debug(f'Current results for iteration {main_i}:\n' +
+            json.dumps(results, indent = 2))
 
         ttcs = {}
-        saved_simid = simres["simid"]
         if "simID" in config["project"] and config["project"]["simID"]:
-            data["final_simid"] = saved_simid
-            data["initial_simid"] = simID
-        if "model" in config["project"] and config["project"]["model"]:
-            data["initial_ids"] = {"pid": project.pid, "tid": scenario.tid, "simid": "1"}
+            results["final_simid"] = simres["simid"]
 
         for risks_i in simres["results"]["risks"]:
             ttcs[risks_i["attackstep_id"]] = [round(float(risks_i["ttc5"]), 3), round(float(risks_i["ttc50"]), 3), round(float(risks_i["ttc95"]), 3)]
 
             previous_ttcs_json = ttcs[risks_i["attackstep_id"]]
-            for i in model_dict_list:
-                if i['exportedId'] == risks_i['object_id']:
-                    refnumber = risks_i['object_id']
-                    try:
-                        refnumber = i['attributesJsonString']['ref']
-                    except:
-                        pass
-            risk_index = refnumber + "." + risks_i['attackstep']
-            if main_i == 0:
-                data["previous_TTC"][risk_index] = previous_ttcs_json
-            else:
-                coa_index = len(data["CoAs"]) - 1
-                if "coaTTC" not in data["CoAs"][coa_index].keys():
-                    data["CoAs"][coa_index]["coaTTC"] = {}
-                data["CoAs"][coa_index]["coaTTC"][risk_index] = previous_ttcs_json
-                data["CoAs"][coa_index]["report_url"] = simres["report_url"]
+            risk_index = risks_i['object_id'] + "." + risks_i['attackstep']
 
-        write_json_file(resultsfile, data)
+            if main_i == 0:
+                results["initial_TTC"][risk_index] = previous_ttcs_json
+            else:
+                coa_index = len(results["CoAs"]) - 1
+                if "coaTTC" not in results["CoAs"][coa_index].keys():
+                    results["CoAs"][coa_index]["coaTTC"] = {}
+                results["CoAs"][coa_index]["coaTTC"][risk_index] = previous_ttcs_json
+                results["CoAs"][coa_index]["report_url"] = simres["report_url"]
+
+        write_json_file(resultsfile, results)
         steps_of_interest = ["{}".format(risks_i["attackstep_id"]) for risks_i in simres["results"]["risks"]]
         logging.debug("Steps of interest are:\n" +
             json.dumps(steps_of_interest, indent = 2))
@@ -327,8 +329,8 @@ def run_coa():
         if main_i != 0:
             eff = calculate_efficiency(previous_ttcs, ttcs)
             logging.debug(f"Efficiency for step {main_i} is {eff}")
-            data["CoAs"][coa_index]["efficiency"] = str(eff)
-            write_json_file(resultsfile, data)
+            results["CoAs"][coa_index]["efficiency"] = str(eff)
+            write_json_file(resultsfile, results)
 
         previous_ttcs = ttcs
 
@@ -338,10 +340,10 @@ def run_coa():
         for risks_i in simres["results"]["risks"]:
             if round(float(risks_i["ttc5"]), 3) == TEMP_INF:
                 continue
-            cri_path = simulation.get_critical_paths([risks_i["attackstep_id"]])
+            crit_path = simulation.get_critical_paths([risks_i["attackstep_id"]])
             logging.debug("Critical path fetched:\n" +
-                json.dumps(cri_path, indent = 2))
-            ag = AttackGraph(cri_path, risks_i["attackstep_id"], lang_meta)
+                json.dumps(crit_path, indent = 2))
+            ag = AttackGraph(crit_path, risks_i["attackstep_id"], lang_meta)
             logging.debug("Critical path converted to an attack graph.")
             attack_paths.append(ag)
 
@@ -355,10 +357,10 @@ def run_coa():
         if (graph.find_critical_attack_step(metric) != 0):
             return ERROR_UNKNOWN_METRIC
 
-        write_json_file(resultsfile, data)
+        write_json_file(resultsfile, results)
         best_def_info, budget_remaining = graph.find_best_defense(lang_meta,
-            model_dict_list, budget_remaining, resultsfile)
-        data = read_json_file(resultsfile)
+            model_dict_list, budget_remaining, results, resultsfile)
+        results = read_json_file(resultsfile)
         if (best_def_info):
             logging.info(f"Best defense for iteration {main_i} is:\n" +
                 json.dumps(best_def_info, indent = 2))
@@ -376,8 +378,9 @@ def run_coa():
         else:
             logging.error("Failed to find an applicable defense for " +
                 f"iteration {main_i}.")
+            print("Failed to find an applicable defense for " +
+                f"iteration {main_i}.")
             return ERROR_NO_DEFENCE
-        data = read_json_file(resultsfile)
 
         simulation, simres = create_simulation(client = client,
             scenario = scenario,

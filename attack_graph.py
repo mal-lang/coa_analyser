@@ -59,7 +59,8 @@ class AttackGraph(nx.DiGraph):
             str(self.nodes))
 
     def find_critical_attack_step(self, metric):
-        logging.debug("Find critical attack step")
+        logging.debug("Find critical attack step according to metric: " +
+            f"{metric}")
         node_metrics = {}
         match metric:
             case 'frequency':
@@ -106,19 +107,19 @@ class AttackGraph(nx.DiGraph):
                 f'{self.nodes[node]["crit_score"]}')
         return 0
 
-    def apply_defense(self, node, budget, cost, data, asset_tags,
+    def apply_defense(self, node, budget, cost, results, asset_tags,
         defense_info, meta_lang, resultsfile):
 
         def_name = defense_info["name"]
 
         budget = budget - cost
 
-        data["CoAs"].append({})
-        data["CoAs"][-1]["monetary_cost"] = {"1": int(cost)}
-        data["CoAs"][-1]["defenses"] = []
-        if len(data["CoAs"]) > 1:
-            data["CoAs"][-1]["defenses"] = data["CoAs"][-2]["defenses"].copy()
-        data["CoAs"][-1]["defenses"].append({"ref": asset_tags["ref"],
+        results["CoAs"].append({})
+        results["CoAs"][-1]["monetary_cost"] = {"1": int(cost)}
+        results["CoAs"][-1]["defenses"] = []
+        if len(results["CoAs"]) > 1:
+            results["CoAs"][-1]["defenses"] = results["CoAs"][-2]["defenses"].copy()
+        results["CoAs"][-1]["defenses"].append({"ref": asset_tags["ref"],
             "defenseName": def_name,
             "assetName": self.nodes[node]["name"],
             "eid": self.nodes[node]["eid"],
@@ -126,7 +127,7 @@ class AttackGraph(nx.DiGraph):
         self.nodes[node]["ref"] = asset_tags["ref"]
         defense_info["metaInfo"]["use_counter"] += 1
 
-        write_json_file(resultsfile, data)
+        write_json_file(resultsfile, results)
 
         logging.info(f'Defense {def_name} on {self.nodes[node]["name"]}' +
             f'(eid:{self.nodes[node]["eid"]}) with a cost of {cost} fit ' +
@@ -134,8 +135,7 @@ class AttackGraph(nx.DiGraph):
         return budget
 
     def find_best_defense(self, meta_lang, model_dict_list,
-        budget_remaining, resultsfile):
-        data = read_json_file(resultsfile)
+        budget_remaining, results, resultsfile):
 
         def_cost_list_dict={}
         for top_attack_step in self.nodes_sorted:
@@ -218,7 +218,7 @@ class AttackGraph(nx.DiGraph):
                                 return self.nodes[node], \
                                     self.apply_defense(node,
                                         budget_remaining, current_cost,
-                                        data, asset_tags, defense_info,
+                                        results, asset_tags, defense_info,
                                         meta_lang, resultsfile)
                             else:
                                 block_range_def[best_def] = 0  # if both costs are high or no cost given
